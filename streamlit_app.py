@@ -203,9 +203,6 @@ def plot_change_map(change_map, title="Change Detection Map"):
 # Home Page
 if page == "🏠 Home":
     col1, col2 = st.columns([2, 1])
-    with col1:
-        st.markdown("# 🛰️ Land Use/Land Cover Classification")
-        st.markdown("### Satellite Image Analysis Dashboard")
     with col2:
         st.image("https://images.unsplash.com/photo-1446776653964-20c1d3a81b06?w=400", use_column_width=True)
     
@@ -308,85 +305,115 @@ elif page == "📊 Classification Results":
             else:
                 st.error(f"No satellite data found for {selected_year}")
 
-# Year Comparison Page
+# Year Comparison Page (supports comparing 2 or 3 years)
 elif page == "📈 Year Comparison":
-    st.title("📈 Year-to-Year Comparison")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        year1 = st.selectbox("Select First Year", [2017, 2020, 2024], index=0)
-    with col2:
-        year2 = st.selectbox("Select Second Year", [2017, 2020, 2024], index=2)
-    
-    if year1 != year2:
-        with st.spinner(f"Loading and processing data for {year1} and {year2}..."):
-            # Load first year
-            bands1 = load_band_files(year1)
-            features1 = load_landsat_features(bands1, downscale_factor=0.5) if bands1 else None
-            
-            # Load second year
-            bands2 = load_band_files(year2)
-            features2 = load_landsat_features(bands2, downscale_factor=0.5) if bands2 else None
-            
-            if features1 is not None and features2 is not None:
-                classified1 = classify_image(features1)
-                classified2 = classify_image(features2)
-                perc1 = compute_percentage_summary(classified1)
-                perc2 = compute_percentage_summary(classified2)
-                
-                # Comparison chart
-                st.subheader("Land Cover Comparison")
-                fig = plot_comparison_bars(perc1, perc2, year1, year2)
+    st.title("📈 Multi-Year Comparison")
+
+    years = [2017, 2020, 2024]
+    selected_years = st.multiselect("Select 2 or 3 years to compare", years, default=years)
+
+    if len(selected_years) < 2:
+        st.warning("Select at least two years for comparison.")
+    elif len(selected_years) > 3:
+        st.warning("Please select at most three years.")
+    else:
+        with st.spinner(f"Loading and processing data for {', '.join(map(str, selected_years))}..."):
+            features_list = []
+            failed = False
+            for y in selected_years:
+                bands = load_band_files(y)
+                feats = load_landsat_features(bands, downscale_factor=0.5) if bands else None
+                if feats is None:
+                    st.error(f"Could not load data for {y}")
+                    failed = True
+                    break
+                features_list.append((y, feats))
+
+            if not failed:
+                # classify and compute percentages
+                perc_list = []
+                for y, feats in features_list:
+                    classified = classify_image(feats)
+                    perc = compute_percentage_summary(classified)
+                    perc_list.append((y, perc))
+
+                # Grouped bar chart for all selected years
+                st.subheader("Land Cover Comparison (all selected years)")
+                labels = list(LAND_TYPES.values())
+                x = np.arange(len(labels))
+                n = len(perc_list)
+                width = 0.8 / max(n, 1)
+                fig, ax = plt.subplots(figsize=(12, 6))
+
+                year_colors = ["lightblue", "green", "orange"]
+                for i, (y, perc) in enumerate(perc_list):
+                    vals = [perc.get(lbl, 0) for lbl in labels]
+                    ax.bar(x + (i - (n-1)/2) * width, vals, width, label=str(y), color=year_colors[i])
+
+                ax.set_xticks(x)
+                ax.set_xticklabels(labels, rotation=45, ha='right')
+                ax.set_ylabel("Percentage (%)")
+                ax.set_title("Land Cover Distribution Across Selected Years")
+                ax.legend(title="Year")
+                ax.grid(True, axis='y', linestyle='--', alpha=0.3)
+                plt.tight_layout()
                 st.pyplot(fig, use_container_width=True)
-                
-                # Change chart
-                st.subheader("Change Analysis")
-                fig = plot_change_bar(perc1, perc2, year1, year2)
-                st.pyplot(fig, use_container_width=True)
-                
-                # Detailed comparison
+
+                # Change analysis relative to the first selected year
+                base_year, base_perc = perc_list[0]
+                for (y, perc) in perc_list[1:]:
+                    st.subheader(f"Change: {y} - {base_year}")
+                    change = [round(perc.get(lbl, 0) - base_perc.get(lbl, 0), 2) for lbl in labels]
+                    colors_change = ['green' if c >= 0 else 'red' for c in change]
+                    fig2, ax2 = plt.subplots(figsize=(12, 6))
+                    bars = ax2.bar(labels, change, color=colors_change, edgecolor='black', linewidth=1.2)
+                    ax2.axhline(0, color='black', linewidth=1.0)
+                    ax2.set_ylabel("Percentage Change (%)")
+                    ax2.set_title(f"Change in Land Cover: {y} - {base_year}")
+                    ax2.grid(True, axis='y', linestyle='--', alpha=0.3)
+                    for bar in bars:
+                        h = bar.get_height()
+                        ax2.text(bar.get_x() + bar.get_width()/2., h, f'{h:.1f}%', ha='center', va='bottom' if h>=0 else 'top', fontsize=9)
+                    plt.tight_layout()
+                    st.pyplot(fig2, use_container_width=True)
+
+                # Detailed comparison table
                 st.markdown("### Detailed Comparison Table")
                 import pandas as pd
-                
-                comparison_data = []
-                for land_type in LAND_TYPES.values():
-                    v1 = perc1.get(land_type, 0)
-                    v2 = perc2.get(land_type, 0)
-                    change = v2 - v1
-                    comparison_data.append({
-                        "Land Type": land_type,
-                        f"{year1} (%)": v1,
-                        f"{year2} (%)": v2,
-                        "Change (%)": round(change, 2),
-                        "Trend": "📈 Increase" if change > 0 else ("📉 Decrease" if change < 0 else "➡️ No Change")
-                    })
-                
-                df = pd.DataFrame(comparison_data)
+                comparison_rows = []
+                for lbl in labels:
+                    row = {"Land Type": lbl}
+                    for (y, perc) in perc_list:
+                        row[f"{y} (%)"] = perc.get(lbl, 0)
+                    # change vs base
+                    last_perc = perc_list[-1][1]
+                    change_vs_base = round(last_perc.get(lbl, 0) - base_perc.get(lbl, 0), 2)
+                    row["Change (%)"] = change_vs_base
+                    row["Trend"] = "📈 Increase" if change_vs_base > 0 else ("📉 Decrease" if change_vs_base < 0 else "➡️ No Change")
+                    comparison_rows.append(row)
+
+                df = pd.DataFrame(comparison_rows)
                 st.dataframe(df, use_container_width=True)
-                
-                # Key insights
+
+                # Key insights comparing first and last selected years
                 st.markdown("### Key Insights")
                 col1, col2, col3, col4 = st.columns(4)
-                
-                largest_increase = max([(lt, perc2.get(lt, 0) - perc1.get(lt, 0)) 
-                                       for lt in LAND_TYPES.values()], key=lambda x: x[1])
-                largest_decrease = min([(lt, perc2.get(lt, 0) - perc1.get(lt, 0)) 
-                                       for lt in LAND_TYPES.values()], key=lambda x: x[1])
-                
+                last_year = perc_list[-1][0]
+                deltas = [(lbl, (perc_list[-1][1].get(lbl,0) - base_perc.get(lbl,0))) for lbl in labels]
+                largest_increase = max(deltas, key=lambda x: x[1])
+                largest_decrease = min(deltas, key=lambda x: x[1])
+
                 with col1:
                     st.success(f"📈 Biggest Increase: {largest_increase[0]} ({largest_increase[1]:+.2f}%)")
                 with col2:
                     st.error(f"📉 Biggest Decrease: {largest_decrease[0]} ({largest_decrease[1]:+.2f}%)")
                 with col3:
-                    total_change = abs(sum(perc2.values()) - sum(perc1.values()))
-                    st.info(f"🔄 Overall Change: {total_change:.2f}%")
+                    # Overall change = half the L1-norm of differences between base and last year
+                    total_change = sum(abs(perc_list[-1][1].get(lbl, 0) - base_perc.get(lbl, 0)) for lbl in LAND_TYPES.values()) / 2
+                    st.info(f"🔄 Overall Change ({base_year} -> {last_year}) (approx. area shifted): {total_change:.2f}%")
                 with col4:
-                    years_diff = year2 - year1
+                    years_diff = last_year - base_year
                     st.metric("Year Difference", f"{years_diff} years")
-            else:
-                st.error(f"Could not load data for the selected years")
-    else:
-        st.warning("Please select two different years for comparison.")
 
 # Change Analysis Page
 elif page == "📍 Change Analysis":
@@ -447,6 +474,8 @@ elif page == "📍 Change Analysis":
                 st.error("Could not load data for change detection")
     else:
         st.warning("Please select two different years for change analysis.")
+
+
 
 # About Page
 elif page == "ℹ️ About":
